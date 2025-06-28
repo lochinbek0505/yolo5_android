@@ -7,20 +7,20 @@ import android.os.Bundle
 import android.util.Log
 import android.util.Size
 import android.view.SurfaceView
-import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import com.example.yolotest.ml.Model
-import com.example.yolotest.ml.YangiModel
+import androidx.core.graphics.scale
+import com.example.yolotest.databinding.ActivityMainBinding
+import org.tensorflow.lite.Interpreter
 import org.tensorflow.lite.support.common.FileUtil
-import org.tensorflow.lite.support.common.ops.NormalizeOp
 import org.tensorflow.lite.support.image.ImageProcessor
 import org.tensorflow.lite.support.image.TensorImage
 import org.tensorflow.lite.support.image.ops.ResizeOp
+import org.tensorflow.lite.DataType
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 
@@ -28,23 +28,26 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var previewView: PreviewView
     private lateinit var overlay: SurfaceView
+    private lateinit var tflite: Interpreter
     private lateinit var labels: List<String>
-    private lateinit var model: YangiModel
     private lateinit var imageProcessor: ImageProcessor
-
+    private lateinit var binding: ActivityMainBinding
     private val executor = Executors.newSingleThreadExecutor()
     private val imageSize = Size(416, 416)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
+        binding = ActivityMainBinding.inflate(layoutInflater)
+        setContentView(binding.root)
 
-        previewView = findViewById(R.id.previewView)
-        overlay = findViewById(R.id.overlay)
+        previewView = binding.previewView
+        overlay = binding.overlay
         overlay.setZOrderOnTop(true)
         overlay.holder.setFormat(PixelFormat.TRANSPARENT)
 
-        if (allPermissionsGranted()) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+            == PackageManager.PERMISSION_GRANTED
+        ) {
             loadModelAndLabels()
             startCamera()
         } else {
@@ -52,27 +55,51 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun allPermissionsGranted() = ContextCompat.checkSelfPermission(
-        baseContext, Manifest.permission.CAMERA
-    ) == PackageManager.PERMISSION_GRANTED
-
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 1 && grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            loadModelAndLabels()
-            startCamera()
-        } else {
-            Toast.makeText(this, "Kamera ruxsati kerak", Toast.LENGTH_SHORT).show()
-        }
-    }
-
     private fun loadModelAndLabels() {
-        model = YangiModel.newInstance(this)
+        val modelFile = FileUtil.loadMappedFile(this, "model.tflite")
+        tflite = Interpreter(modelFile)
         labels = FileUtil.loadLabels(this, "labels.txt")
+
         imageProcessor = ImageProcessor.Builder()
             .add(ResizeOp(416, 416, ResizeOp.ResizeMethod.BILINEAR))
-            .add(NormalizeOp(0f, 255f))
             .build()
+    }
+
+    private fun runInference(bitmap: Bitmap): List<DetectionResult> {
+        val resized = bitmap.scale(416, 416)
+        val tensorImage = TensorImage(DataType.FLOAT32)
+        tensorImage.load(resized)
+
+        val input = imageProcessor.process(tensorImage).buffer
+
+        // Modelga mos chiqish shakli — modelga qarab o'zgartiring!
+        val output = Array(1) { Array(10647) { FloatArray(7) } }
+
+        tflite.run(input, output)
+
+        val results = mutableListOf<DetectionResult>()
+        val confidenceThreshold = 0.5f
+
+        for (i in 0 until 2535) {
+            val row = output[0][i]
+            val x = row[0]
+            val y = row[1]
+            val w = row[2]
+            val h = row[3]
+            val objConf = row[4]
+            val classId = row[5].toInt()
+            val classConf = row[6]
+            val finalConf = objConf * classConf
+            val label = labels.getOrElse(classId) { "Unknown" }
+
+            Log.e("TEST_ONAGNI_EMGIR","$objConf * $classConf $finalConf $label")
+            if (finalConf > confidenceThreshold) {
+                val label = labels.getOrElse(classId) { "Unknown" }
+                results.add(DetectionResult(x, y, w, h, finalConf, label))
+            }
+        }
+
+        return results
     }
 
     private fun startCamera() {
@@ -93,7 +120,9 @@ class MainActivity : AppCompatActivity() {
             imageAnalysis.setAnalyzer(executor, ImageAnalysis.Analyzer { imageProxy ->
                 val bitmap = imageProxyToBitmap(imageProxy)
                 val results = runInference(bitmap)
-//                drawResults(results)
+                runOnUiThread {
+                    drawResults(results)
+                }
                 imageProxy.close()
             })
 
@@ -124,33 +153,6 @@ class MainActivity : AppCompatActivity() {
         return BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
     }
 
-    private fun runInference(bitmap: Bitmap): List<DetectionResult> {
-        val tensorImage = TensorImage.fromBitmap(bitmap)
-        val processedImage = imageProcessor.process(tensorImage)
-        val outputs = model.process(processedImage.tensorBuffer)
-        val outputArray = outputs.outputFeature0AsTensorBuffer.floatArray
-
-        val results = mutableListOf<DetectionResult>()
-        val numDetections = 10647
-
-        for (i in 0 until numDetections) {
-            val offset = i * 7
-            val conf = outputArray[offset + 4]
-            if (conf > 0.5f) {
-                val x = outputArray[offset]
-                val y = outputArray[offset + 1]
-                val w = outputArray[offset + 2]
-                val h = outputArray[offset + 3]
-                val classScores = outputArray.copyOfRange(offset + 5, offset + 7)
-                val classId = classScores.withIndex().maxByOrNull { it.value }?.index ?: -1
-                Log.d("MainActivitydfdx", "Class ID: ${labels.getOrElse(classId) { "?" }}")
-                results.add(DetectionResult(x, y, w, h, conf, labels.getOrElse(classId) { "?" }))
-            }
-        }
-
-        return results
-    }
-
     private fun drawResults(results: List<DetectionResult>) {
         val canvas = overlay.holder.lockCanvas() ?: return
         canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
@@ -160,19 +162,27 @@ class MainActivity : AppCompatActivity() {
             style = Paint.Style.STROKE
             strokeWidth = 4f
             textSize = 40f
+            isAntiAlias = true
         }
 
-        val scaleX = overlay.width.toFloat()
-        val scaleY = overlay.height.toFloat()
-
-        results.forEach {
-            val left = (it.x - it.w / 2) * scaleX
-            val top = (it.y - it.h / 2) * scaleY
-            val right = (it.x + it.w / 2) * scaleX
-            val bottom = (it.y + it.h / 2) * scaleY
-            canvas.drawRect(left, top, right, bottom, paint)
-            canvas.drawText("${it.label} ${"%.2f".format(it.confidence)}", left, top - 10, paint)
+        if (results.isEmpty()) {
+            overlay.holder.unlockCanvasAndPost(canvas)
+            return
         }
+
+        val best = results.maxByOrNull { it.confidence } ?: return
+
+        val modelInputSize = 416f
+        val scaleX = overlay.width / modelInputSize
+        val scaleY = overlay.height / modelInputSize
+
+        val left = (best.x - best.w / 2) * scaleX
+        val top = (best.y - best.h / 2) * scaleY
+        val right = (best.x + best.w / 2) * scaleX
+        val bottom = (best.y + best.h / 2) * scaleY
+
+        canvas.drawRect(left, top, right, bottom, paint)
+        canvas.drawText("${best.label} ${"%.2f".format(best.confidence)}", left, top - 10, paint)
 
         overlay.holder.unlockCanvasAndPost(canvas)
     }
@@ -188,6 +198,6 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        model.close()
+        tflite.close()
     }
 }

@@ -1,3 +1,5 @@
+import com.android.tools.r8.internal.iM
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -37,6 +39,7 @@ android {
     }
 
     buildFeatures {
+        viewBinding=true
         mlModelBinding = true
     }
 }
@@ -53,13 +56,14 @@ dependencies {
     androidTestImplementation(libs.androidx.espresso.core)
 
 
-    implementation ("org.tensorflow:tensorflow-lite:2.13.0")
-    implementation ("org.tensorflow:tensorflow-lite-support:0.3.1")
-    implementation ("org.tensorflow:tensorflow-lite-task-vision:0.4.2")
-    implementation ("androidx.camera:camera-camera2:1.1.0")
-    implementation ("androidx.camera:camera-lifecycle:1.1.0")
-    implementation ("androidx.camera:camera-view:1.0.0-alpha32")
-    implementation ("org.tensorflow:tensorflow-lite-support:0.1.0")
-    implementation ("org.tensorflow:tensorflow-lite-metadata:0.1.0")
+    implementation("org.tensorflow:tensorflow-lite:2.9.0")
+    implementation("org.tensorflow:tensorflow-lite-support:0.4.3")
+    implementation("org.tensorflow:tensorflow-lite-task-vision:0.4.3")
+    implementation("org.tensorflow:tensorflow-lite-gpu:2.9.0")
+    implementation("org.tensorflow:tensorflow-lite-metadata:0.1.0")
+
+    implementation("androidx.camera:camera-camera2:1.1.0")
+    implementation("androidx.camera:camera-lifecycle:1.1.0")
+    implementation("androidx.camera:camera-view:1.1.0")
 
 }
